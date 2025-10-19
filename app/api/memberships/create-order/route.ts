@@ -1,4 +1,4 @@
-// app/api/memberships/cashfree/order/route.ts (or wherever this file lives)
+// app/api/memberships/create-order/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import Membership from "@/models/Membership";
@@ -39,6 +39,13 @@ function getBaseUrl(req: NextRequest) {
   const proto = req.headers.get("x-forwarded-proto") || "https";
   return host ? `${proto}://${host}` : "http://localhost:3000";
 }
+
+// Minimal shape we read from Cashfree response
+type CashfreeOrderResponse = {
+  payment_session_id?: string;
+  message?: string;
+  [k: string]: unknown;
+};
 
 export async function POST(req: NextRequest) {
   await dbConnect();
@@ -106,16 +113,23 @@ export async function POST(req: NextRequest) {
     cache: "no-store",
   });
 
-  const j: unknown = await resCF.json();
+  const j = (await resCF.json()) as unknown as CashfreeOrderResponse;
+
   if (!resCF.ok) {
     const message =
-      typeof j === "object" && j && "message" in j ? String((j as any).message) : "Cashfree order failed";
+      typeof j === "object" && j && "message" in j && typeof j.message === "string"
+        ? j.message
+        : "Cashfree order failed";
     return NextResponse.json({ error: message, details: j }, { status: 500 });
   }
 
+  const paymentSessionId =
+    typeof j === "object" && j && "payment_session_id" in j && typeof j.payment_session_id !== "undefined"
+      ? String(j.payment_session_id)
+      : undefined;
+
   return NextResponse.json({
-    paymentSessionId:
-      typeof j === "object" && j && "payment_session_id" in j ? String((j as any).payment_session_id) : undefined,
+    paymentSessionId,
     orderId,
   });
 }
