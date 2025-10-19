@@ -4,9 +4,9 @@ import { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
 const PLANS = [
-  { id: "1M" as const, title: "1 Month",  games: 30,  amount: 5000,  subtitle: "30 games" },
-  { id: "3M" as const, title: "3 Months", games: 90,  amount: 12000, subtitle: "90 games" },
-  { id: "6M" as const, title: "6 Months", games: 150, amount: 20000, subtitle: "150 games" },
+  { id: "1M" as const, title: "1 Month",  games: 25,  amount: 2999,  subtitle: "25 games" },
+  { id: "3M" as const, title: "3 Months", games: 75,  amount: 8999, subtitle: "75 games" },
+  { id: "6M" as const, title: "6 Months", games: 150, amount: 17999, subtitle: "150 games" },
 ];
 
 type MeUser = { id: string; userId: string; name?: string; email: string; phone?: string };

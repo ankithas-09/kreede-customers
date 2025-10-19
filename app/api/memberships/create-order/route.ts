@@ -1,3 +1,4 @@
+// app/api/memberships/cashfree/order/route.ts (or wherever this file lives)
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import Membership from "@/models/Membership";
@@ -14,10 +15,30 @@ type Body = {
 };
 
 const PLAN_MAP = {
-  "1M": { planName: "1 month", durationMonths: 1, games: 30, amount: 5000 },
-  "3M": { planName: "3 months", durationMonths: 3, games: 90, amount: 12000 },
-  "6M": { planName: "6 months", durationMonths: 6, games: 150, amount: 20000 },
+  "1M": { planName: "1 month", durationMonths: 1, games: 25, amount: 2999 },
+  "3M": { planName: "3 months", durationMonths: 3, games: 75, amount: 8999 },
+  "6M": { planName: "6 months", durationMonths: 6, games: 150, amount: 17999 },
 } as const;
+
+// prefer env, else infer from headers, else localhost (dev)
+function getBaseUrl(req: NextRequest) {
+  const envUrl =
+    process.env.PUBLIC_BASE_URL ||
+    process.env.NEXT_PUBLIC_BASE_URL ||
+    (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : undefined);
+
+  if (envUrl) {
+    try {
+      // strip any accidental path like /home; keep only origin
+      return new URL(envUrl).origin;
+    } catch {
+      return envUrl.replace(/\/+$/, "");
+    }
+  }
+  const host = req.headers.get("x-forwarded-host") || req.headers.get("host");
+  const proto = req.headers.get("x-forwarded-proto") || "https";
+  return host ? `${proto}://${host}` : "http://localhost:3000";
+}
 
 export async function POST(req: NextRequest) {
   await dbConnect();
@@ -29,10 +50,10 @@ export async function POST(req: NextRequest) {
   const plan = PLAN_MAP[planId];
   if (!plan) return NextResponse.json({ error: "Invalid planId" }, { status: 400 });
 
-  // Create a unique order id (your style)
+  // Unique membership order id
   const orderId = `mem_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
-  // 1) Create a pending membership doc (idempotent by orderId)
+  // 1) Create/ensure pending membership (idempotent on orderId)
   await Membership.findOneAndUpdate(
     { orderId },
     {
@@ -52,6 +73,9 @@ export async function POST(req: NextRequest) {
   );
 
   // 2) Create Cashfree order
+  const baseUrl = getBaseUrl(req);
+  const returnUrl = `${baseUrl}/membership?order_id={order_id}`;
+
   const body = {
     order_id: orderId,
     order_amount: plan.amount,
@@ -64,8 +88,8 @@ export async function POST(req: NextRequest) {
       customer_phone: "9999999999",
     },
     order_meta: {
-      // Redirect back to this page (membership UI) with the order_id
-      return_url: `${process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000"}/membership?order_id={order_id}`,
+      return_url: returnUrl,
+      // notify_url: `${baseUrl}/api/payments/cashfree/webhook` // optional
     },
   };
 
@@ -82,10 +106,16 @@ export async function POST(req: NextRequest) {
     cache: "no-store",
   });
 
-  const j = await resCF.json();
+  const j: unknown = await resCF.json();
   if (!resCF.ok) {
-    return NextResponse.json({ error: j?.message || "Cashfree order failed" }, { status: 500 });
+    const message =
+      typeof j === "object" && j && "message" in j ? String((j as any).message) : "Cashfree order failed";
+    return NextResponse.json({ error: message, details: j }, { status: 500 });
   }
 
-  return NextResponse.json({ paymentSessionId: j.payment_session_id, orderId });
+  return NextResponse.json({
+    paymentSessionId:
+      typeof j === "object" && j && "payment_session_id" in j ? String((j as any).payment_session_id) : undefined,
+    orderId,
+  });
 }
