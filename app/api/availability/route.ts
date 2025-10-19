@@ -1,6 +1,8 @@
+// app/api/availability/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import Booking from "@/models/Booking";
+import GuestBooking from "@/models/GuestBooking"; // ← NEW
 import SlotHold from "@/models/SlotHold";
 
 export type CourtSlot = {
@@ -27,7 +29,7 @@ export async function GET(req: NextRequest) {
   await dbConnect();
   const { searchParams } = new URL(req.url);
   const date = searchParams.get("date") || new Date().toISOString().slice(0, 10);
-  const clientId = searchParams.get("clientId") || ""; // NEW
+  const clientId = searchParams.get("clientId") || "";
 
   // Build base day structure: 3 courts × hourly slots
   const base = buildDay();
@@ -40,23 +42,52 @@ export async function GET(req: NextRequest) {
     }))
   );
 
-  // Mark booked (PAID)
-  const booked = await Booking.find({ date, status: "PAID" }, { slots: 1 }).lean();
-  for (const b of booked) {
+  // 1) Mark booked (PAID) from member bookings
+  const userBooked = await Booking.find(
+    { date, status: "PAID" },
+    { _id: 0, slots: 1 }
+  ).lean();
+
+  for (const b of userBooked) {
     for (const s of b.slots || []) {
-      const arr = courts[s.courtId - 1];
+      const courtIdx = (s.courtId ?? 0) - 1;
+      if (courtIdx < 0 || courtIdx >= courts.length) continue;
+      const arr = courts[courtIdx];
       const idx = arr.findIndex((x) => x.start === s.start);
       if (idx >= 0) arr[idx].status = "booked";
     }
   }
 
-  // Mark holds (skip over already-booked)
-  const holds = await SlotHold.find({ date }).lean();
+  // 2) Mark booked (PAID) from guest bookings  ← NEW
+  const guestBooked = await GuestBooking.find(
+    { date, status: "PAID" },
+    { _id: 0, slots: 1 }
+  ).lean();
+
+  for (const gb of guestBooked) {
+    for (const s of gb.slots || []) {
+      const courtIdx = (s.courtId ?? 0) - 1;
+      if (courtIdx < 0 || courtIdx >= courts.length) continue;
+      const arr = courts[courtIdx];
+      const idx = arr.findIndex((x) => x.start === s.start);
+      if (idx >= 0) arr[idx].status = "booked";
+    }
+  }
+
+  // 3) Mark holds (skip over already-booked)
+  const holds = await SlotHold.find(
+    { date },
+    { _id: 0, courtId: 1, start: 1, clientId: 1 }
+  ).lean();
+
   for (const h of holds) {
-    const arr = courts[h.courtId - 1];
+    const courtIdx = (h.courtId ?? 0) - 1;
+    if (courtIdx < 0 || courtIdx >= courts.length) continue;
+    const arr = courts[courtIdx];
     const idx = arr.findIndex((x) => x.start === h.start);
     if (idx >= 0 && arr[idx].status === "available") {
-      arr[idx].status = h.clientId && clientId && h.clientId === clientId ? "heldByMe" : "held";
+      arr[idx].status =
+        h.clientId && clientId && h.clientId === clientId ? "heldByMe" : "held";
     }
   }
 
