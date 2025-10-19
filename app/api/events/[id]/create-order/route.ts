@@ -1,7 +1,7 @@
 // app/api/events/[id]/create-order/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import Event from "@/app/models/Event";
+import Event from "@/models/Event";
 import { cookies } from "next/headers";
 import jwt, { type JwtPayload } from "jsonwebtoken";
 

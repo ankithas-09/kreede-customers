@@ -3,8 +3,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import jwt, { type JwtPayload } from "jsonwebtoken";
 import { dbConnect } from "@/lib/db";
-import Event from "@/app/models/Event";
-import Registration from "@/app/models/Registration";
+import Event from "@/models/Event";
+import Registration from "@/models/Registration";
 
 const COOKIE_NAME = "kreede_session";
 const JWT_SECRET = process.env.JWT_SECRET || "dev_secret";

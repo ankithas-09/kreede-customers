@@ -1,9 +1,9 @@
 // app/api/bookings/cancel/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import Booking from "@/app/models/Booking";
-import Refund from "@/app/models/Refund";
-import Membership from "@/app/models/Membership";
+import Booking from "@/models/Booking";
+import Refund from "@/models/Refund";
+import Membership from "@/models/Membership";
 import { cookies } from "next/headers";
 import jwt, { type JwtPayload } from "jsonwebtoken";
 

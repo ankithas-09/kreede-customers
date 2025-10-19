@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import Membership from "@/app/models/Membership";
+import Membership from "@/models/Membership";
 
 const BASE =
   process.env.CASHFREE_ENV === "production"

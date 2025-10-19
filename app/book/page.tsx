@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import CourtBoard from "@/components/CourtBoard";
 import type { CourtSlot } from "@/components/CourtBoard";
@@ -12,51 +12,168 @@ function encodeSelections(selections: Selection[]) {
   return typeof window === "undefined" ? "" : btoa(encodeURIComponent(s));
 }
 
+function getOrCreateClientId(): string {
+  if (typeof window === "undefined") return "";
+  const KEY = "kreede:clientId";
+  let id = localStorage.getItem(KEY);
+  if (!id) {
+    id = `client_${crypto.randomUUID?.() || Math.random().toString(36).slice(2)}`;
+    localStorage.setItem(KEY, id);
+  }
+  return id;
+}
+
+/** build a Date from "YYYY-MM-DD" + "HH:MM" in the user's local timezone */
+function toLocalDateTime(dateStr: string, timeHHMM: string) {
+  // No timezone suffix => local time
+  return new Date(`${dateStr}T${timeHHMM}:00`);
+}
+
+/** should the slot be disabled because it's past the current time (start < now)? */
+function isPastStart(now: Date, dateStr: string, start: string) {
+  const slotStart = toLocalDateTime(dateStr, start);
+  return slotStart.getTime() < now.getTime();
+}
+
 export default function Page() {
   const router = useRouter();
   const [date, setDate] = useState<string>(() => new Date().toISOString().slice(0, 10));
   const [selected, setSelected] = useState<Selection[]>([]);
-  const [notice] = useState<string>(""); // setter unused; keep read-only state
+  const [notice, setNotice] = useState<string>("");
   const [data, setData] = useState<{ date: string; courts: CourtSlot[][] } | null>(null);
   const [loading, setLoading] = useState(false);
 
-  // Auto-tick every minute so past slots grey out
-  const [tick, setTick] = useState(0);
+  const clientIdRef = useRef<string>("");
   useEffect(() => {
-    const id = setInterval(() => setTick((t) => t + 1), 60_000);
-    return () => clearInterval(id);
+    clientIdRef.current = getOrCreateClientId();
   }, []);
 
-  const fetchAvailability = useCallback(async () => {
-    setLoading(true);
-    try {
-      const res = await fetch(`/api/availability?date=${date}`);
-      const j = await res.json();
-      setData(j);
-      setSelected([]); // clear selection on refresh
-    } finally {
+  // Poll availability (10s) including clientId so API can mark heldByMe
+  useEffect(() => {
+    let alive = true;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const fetchAvail = async () => {
+      try {
+        const res = await fetch(`/api/availability?date=${date}&clientId=${clientIdRef.current}`, {
+          cache: "no-store",
+        });
+        const j = (await res.json()) as { date: string; courts: CourtSlot[][] };
+        if (!alive) return;
+
+        setData(j);
+
+        // prune selections that became booked or held by others (past is handled visually)
+        const blocked = new Set<string>();
+        j.courts.flat().forEach((s: CourtSlot) => {
+          if (s.status === "booked" || s.status === "held") {
+            blocked.add(`${s.courtId}|${s.start}`);
+          }
+        });
+        setSelected((prev) => prev.filter((p) => !blocked.has(`${p.courtId}|${p.start}`)));
+      } catch {
+        // no-op
+      }
+    };
+
+    (async () => {
+      setLoading(true);
+      await fetchAvail();
       setLoading(false);
-    }
+      const loop = async () => {
+        await fetchAvail();
+        timer = setTimeout(loop, 10_000);
+      };
+      void loop();
+    })();
+
+    return () => {
+      alive = false;
+      if (timer) clearTimeout(timer);
+    };
   }, [date]);
 
-  useEffect(() => {
-    fetchAvailability();
-  }, [date, tick, fetchAvailability]);
-
+  // Apply "past → disabled (grey)" overlay *except* for already-booked (red)
   const courts = useMemo(() => {
     if (!data) return [];
+    const now = new Date(); // local time (browser)
+
+    // Transform a deep copy to avoid mutating server data
+    const copy: CourtSlot[][] = data.courts.map((court) =>
+      court.map((s) => {
+        // Keep booked RED no matter what
+        if (s.status === "booked") return s;
+
+        // If the slot start is in the past, mark disabled (grey)
+        if (isPastStart(now, data.date, s.start)) {
+          return { ...s, status: "disabled" as const };
+        }
+
+        // Otherwise keep the server-provided status (available/held/heldByMe)
+        return s;
+      })
+    );
+
     return [
-      { id: 1, title: "Court 1", data: data.courts[0] },
-      { id: 2, title: "Court 2", data: data.courts[1] },
-      { id: 3, title: "Court 3", data: data.courts[2] },
+      { id: 1, title: "Court 1", data: copy[0] },
+      { id: 2, title: "Court 2", data: copy[1] },
+      { id: 3, title: "Court 3", data: copy[2] },
     ] as const;
   }, [data]);
 
-  const toggle = (s: Selection) => {
-    setSelected((prev) => {
-      const exists = prev.some((p) => p.courtId === s.courtId && p.start === s.start);
-      return exists ? prev.filter((p) => !(p.courtId === s.courtId && p.start === s.start)) : [...prev, s];
-    });
+  // Place a hold (kept for full TTL; no early release)
+  const placeHold = async (s: Selection) => {
+    try {
+      const res = await fetch("/api/holds", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ date, selections: [s], clientId: clientIdRef.current }),
+      });
+      const j = (await res.json()) as { results?: { ok?: boolean }[] };
+      const ok = j?.results?.[0]?.ok;
+      if (!ok) {
+        setNotice("Someone is booking these slots");
+        setTimeout(() => setNotice(""), 2500);
+        return false;
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const toggle = async (s: Selection) => {
+    const key = (x: Selection) => `${x.courtId}|${x.start}`;
+    const isSelected = selected.some((p) => key(p) === key(s));
+
+    if (isSelected) {
+      // Just deselect locally; holds persist to TTL
+      setSelected((prev) => prev.filter((p) => key(p) !== key(s)));
+      return;
+    }
+
+    // Disallow picking past slots in case polling staleness still shows them
+    if (isPastStart(new Date(), date, s.start)) {
+      setNotice("This time has already passed");
+      setTimeout(() => setNotice(""), 2000);
+      return;
+    }
+
+    // allow if available or heldByMe
+    const slot = data?.courts[s.courtId - 1]?.find((x) => x.start === s.start);
+    if (!slot || (slot.status !== "available" && slot.status !== "heldByMe")) {
+      setNotice("Someone is booking these slots");
+      setTimeout(() => setNotice(""), 2500);
+      return;
+    }
+
+    // If it's not already held by me, place a hold first
+    if (slot.status === "available") {
+      const ok = await placeHold(s);
+      if (!ok) return;
+    }
+
+    setSelected((prev) => [...prev, s]);
   };
 
   const goToCheckout = () => {
@@ -78,7 +195,10 @@ export default function Page() {
               id="date"
               type="date"
               value={date}
-              onChange={(e) => setDate(e.target.value)}
+              onChange={(e) => {
+                setSelected([]); // clear local picks on date change
+                setDate(e.target.value);
+              }}
               style={{
                 background: "#fff",
                 color: "#111",
@@ -90,9 +210,9 @@ export default function Page() {
           </div>
           <div className="legend" style={{ color: "#111" }}>
             <span><i className="dot dot-green"></i> Available</span>
-            <span><i className="dot dot-blue"></i> Selected</span>
+            <span><i className="dot dot-blue"></i> Selected / On hold (you)</span>
             <span><i className="dot dot-red"></i> Booked</span>
-            <span><i className="dot dot-grey"></i> Disabled</span>
+            <span><i className="dot dot-grey"></i> Disabled (past / on hold)</span>
           </div>
         </div>
 
@@ -107,9 +227,10 @@ export default function Page() {
             <CourtBoard
               key={c.id}
               title={c.title}
+              date={date}
               data={c.data}
               selected={selected}
-              onToggle={toggle}
+              onToggleAction={toggle}
             />
           ))}
         </div>

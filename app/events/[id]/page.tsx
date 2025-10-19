@@ -2,7 +2,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { dbConnect } from "@/lib/db";
-import Event, { type EventDoc } from "@/app/models/Event";
+import Event, { type EventDoc } from "@/models/Event";
 import RegisterButton from "../RegisterButton";
 
 /** Convert a Google Drive "view" link to embeddable preview link */

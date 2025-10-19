@@ -1,7 +1,7 @@
 // app/api/events/[id]/registered/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import Registration from "@/app/models/Registration";
+import Registration from "@/models/Registration";
 import { cookies } from "next/headers";
 import jwt, { type JwtPayload } from "jsonwebtoken";
 

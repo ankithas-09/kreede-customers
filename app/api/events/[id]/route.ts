@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import Event from "@/app/models/Event";
+import Event from "@/models/Event";
 
 export async function GET(
   _req: Request,

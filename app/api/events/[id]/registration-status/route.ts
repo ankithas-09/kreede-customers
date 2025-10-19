@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import Registration from "@/app/models/Registration";
+import Registration from "@/models/Registration";
 import { readAuthCookie } from "@/lib/auth";
 
 export async function GET(

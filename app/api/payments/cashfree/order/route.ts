@@ -1,7 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { v4 as uuidv4 } from "uuid";
 
-const BASE = "https://sandbox.cashfree.com/pg";
+const BASE =
+  process.env.CASHFREE_ENV === "production"
+    ? "https://api.cashfree.com/pg"
+    : "https://sandbox.cashfree.com/pg";
+
 const API_VERSION = process.env.CASHFREE_API_VERSION || "2023-08-01";
 
 export async function POST(req: NextRequest) {

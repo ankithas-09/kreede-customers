@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { User, type IUser } from "@/app/models/User";
+import { User, type IUser } from "@/models/User";
 import { setAuthCookie } from "@/lib/auth";
 import { Types } from "mongoose";
 

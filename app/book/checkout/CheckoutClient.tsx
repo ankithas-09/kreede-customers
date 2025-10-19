@@ -34,6 +34,25 @@ type PendingBooking = {
   amount: number; // actually charged amount
 };
 
+function getClientId(): string {
+  if (typeof window === "undefined") return "";
+  const KEY = "kreede:clientId";
+  const existing = localStorage.getItem(KEY);
+  return existing || "";
+}
+
+async function releaseHolds(date: string, selections: Selection[]) {
+  try {
+    const clientId = getClientId();
+    if (!clientId) return;
+    await fetch("/api/holds", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ date, clientId, selections }),
+    });
+  } catch {}
+}
+
 export default function CheckoutClient() {
   const router = useRouter();
   const qp = useSearchParams();
@@ -113,10 +132,12 @@ export default function CheckoutClient() {
             date: pending.date,
             selections: pending.selections,
             amount: pending.amount,
+            clientId: getClientId(), // ensure only the holder can finalize
           }),
         });
-        // Even if confirm says already done, we proceed
         await res.json().catch(() => ({}));
+        // Clear holds on success (or even if server already processed)
+        await releaseHolds(pending.date, pending.selections);
       } catch {
         // swallow and continue
       } finally {
@@ -139,10 +160,12 @@ export default function CheckoutClient() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ user, date, selections }),
+        body: JSON.stringify({ user, date, selections, clientId: getClientId() }),
       });
       const j = await res.json();
       if (!res.ok || !j.ok) throw new Error(j?.error || "Could not book with membership.");
+      // release the held slots now that booking is done
+      await releaseHolds(date, selections);
       router.replace("/home");
     } catch (e: unknown) {
       const message = e instanceof Error ? e.message : "Booking failed.";

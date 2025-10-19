@@ -1,6 +1,6 @@
 // app/events/page.tsx
 import { dbConnect } from "@/lib/db";
-import Event from "@/app/models/Event";
+import Event from "@/models/Event";
 import Link from "next/link";
 
 type EventRow = {

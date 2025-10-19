@@ -2,18 +2,20 @@
 import { NextRequest, NextResponse } from "next/server";
 import mongoose from "mongoose";
 import { dbConnect } from "@/lib/db";
-import Booking from "@/app/models/Booking";
-import Membership from "@/app/models/Membership";
+import Booking from "@/models/Booking";
+import Membership from "@/models/Membership";
+import SlotHold from "@/models/SlotHold";
 
 type Selection = { courtId: number; start: string; end: string };
 
 export async function POST(req: NextRequest) {
   await dbConnect();
 
-  const { user, date, selections } = (await req.json()) as {
+  const { user, date, selections, clientId } = (await req.json()) as {
     user: { id: string; name?: string; email: string };
     date: string;            // "YYYY-MM-DD"
     selections: Selection[]; // [{ courtId, start, end }, ...]
+    clientId?: string;       // holder/browser id from localStorage
   };
 
   if (!user?.id || !user?.email || !date || !Array.isArray(selections) || selections.length === 0) {
@@ -31,7 +33,7 @@ export async function POST(req: NextRequest) {
 
   const gamesTotal = mem.games || 0;
   const gamesUsed = mem.gamesUsed || 0;
-  const remaining = Math.max(0, gamesTotal - gamesUsed);
+  const remaining = Math.max(0, gamesTotal - (gamesUsed || 0));
 
   if (remaining < selections.length) {
     return NextResponse.json(
@@ -59,6 +61,29 @@ export async function POST(req: NextRequest) {
     if (bookedSet.has(`${s.courtId}|${s.start}`)) {
       return NextResponse.json(
         { ok: false, error: `Slot Court ${s.courtId} • ${s.start}-${s.end} is already booked.` },
+        { status: 409 }
+      );
+    }
+  }
+
+  // 2b) Guard against foreign holds: if a slot is currently on hold by SOMEONE ELSE, block.
+  if (clientId) {
+    const holds = await SlotHold.find({
+      date,
+      $or: selections.map((s) => ({ courtId: s.courtId, start: s.start })),
+    }).lean();
+
+    const conflictHold = holds.find((h) => h.clientId !== clientId);
+    if (conflictHold) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: `Slot Court ${conflictHold.courtId} • ${
+            selections.find(x => x.courtId === conflictHold.courtId && x.start === conflictHold.start)?.start
+          }-${
+            selections.find(x => x.courtId === conflictHold.courtId && x.start === conflictHold.start)?.end
+          } is currently on hold by another user.`,
+        },
         { status: 409 }
       );
     }
@@ -93,9 +118,15 @@ export async function POST(req: NextRequest) {
 
     // Increment membership usage (cap at total games)
     const incBy = selections.length;
-    const newUsed = Math.min(gamesUsed + incBy, gamesTotal);
+    const newUsed = Math.min((gamesUsed || 0) + incBy, gamesTotal);
 
     await Membership.updateOne({ _id: mem._id }, { $set: { gamesUsed: newUsed } }, { session });
+
+    // Clear holds for these slots (regardless of holder; booking is now final)
+    await SlotHold.deleteMany({
+      date,
+      $or: selections.map((s) => ({ courtId: s.courtId, start: s.start })),
+    }).session(session);
 
     await session.commitTransaction();
     session.endSession();

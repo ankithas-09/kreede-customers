@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import mongoose from "mongoose";
 import { dbConnect } from "@/lib/db";
-import { Booking } from "@/app/models/Booking";
+import { Booking } from "@/models/Booking";
 import { Order } from "@/models/Order";
 
 const PRICE_PER_SLOT = 500;

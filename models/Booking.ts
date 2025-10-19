@@ -1,76 +1,66 @@
-// @/models/Booking.ts
 import mongoose, { Schema, model, models } from "mongoose";
 
+/** One hour slot like 06:00–07:00 on a given court */
+export type SlotItem = {
+  courtId: number;
+  start: string; // "06:00"
+  end: string;   // "07:00"
+};
+
 export interface BookingDoc extends mongoose.Document {
-  courtId: number;            // Court number
-  date: string;               // "YYYY-MM-DD"
-  startTime: string;          // "HH:mm"
-  endTime: string;            // "HH:mm"
-  name: string;               // Booker name
-  email: string;              // Booker email
-  phone: string;              // Booker phone
-  price: number;              // Price for this slot (e.g. 500)
-  status: "confirmed" | "cancelled" | "refunded";
+  orderId: string;                 // Cashfree order_id (unique/idempotent)
+  userId: string;                  // your internal user id (from session)
+  userName?: string;
+  userEmail: string;
+  phone?: string;
+
+  date: string;                    // "YYYY-MM-DD"
+  slots: SlotItem[];               // selected slots
+  amount: number;                  // total paid in Rs
+  currency: "INR";
+  status: "PAID" | "PENDING" | "FAILED";
+  paymentRef?: string;             // optional payment reference/txn id
+  paymentRaw?: unknown;            // Cashfree payment payload snapshot
+
   createdAt: Date;
   updatedAt: Date;
 }
 
-const timeRegex = /^([01]\d|2[0-3]):[0-5]\d$/;     // 00:00 - 23:59
-const dateRegex = /^\d{4}-\d{2}-\d{2}$/;           // YYYY-MM-DD
+const SlotSchema = new Schema<SlotItem>(
+  {
+    courtId: { type: Number, required: true },
+    start:   { type: String, required: true },
+    end:     { type: String, required: true },
+  },
+  { _id: false }
+);
 
 const BookingSchema = new Schema<BookingDoc>(
   {
-    courtId: { type: Number, required: true, min: 1, index: true },
+    orderId:   { type: String, required: true, unique: true, index: true },
+    userId:    { type: String, required: true, index: true },
+    userName:  { type: String },
+    userEmail: { type: String, required: true, index: true },
+    phone:     { type: String },
 
-    // keep as string to match your handlers; validate format
-    date: {
-      type: String,
-      required: true,
-      validate: {
-        validator: (v: string) => dateRegex.test(v),
-        message: "date must be in YYYY-MM-DD format",
-      },
-      index: true,
-    },
+    date:   { type: String, required: true, index: true }, // YYYY-MM-DD
+    slots:  { type: [SlotSchema], required: true },
+    amount: { type: Number, required: true },
+    currency:{ type: String, default: "INR" },
 
-    startTime: {
-      type: String,
-      required: true,
-      validate: {
-        validator: (v: string) => timeRegex.test(v),
-        message: "startTime must be in HH:mm (24h) format",
-      },
-      index: true,
-    },
-
-    endTime: {
-      type: String,
-      required: true,
-      validate: {
-        validator: (v: string) => timeRegex.test(v),
-        message: "endTime must be in HH:mm (24h) format",
-      },
-    },
-
-    name:  { type: String, required: true, trim: true },
-    email: { type: String, required: true, trim: true, lowercase: true },
-    phone: { type: String, required: true, trim: true },
-
-    price:  { type: Number, required: true, min: 0 },
-    status: { type: String, enum: ["confirmed", "cancelled", "refunded"], default: "confirmed", index: true },
+    status: { type: String, enum: ["PAID", "PENDING", "FAILED"], default: "PENDING", index: true },
+    paymentRef: { type: String },
+    paymentRaw: { type: Schema.Types.Mixed },
   },
   {
     timestamps: true,
-    collection: "bookings",   // use the same collection name you intend
-    strict: true,
+    strict: true,                 // disallow fields not in schema
+    collection: "bookings",       // use a stable collection name
   }
 );
 
-// Prevent double-booking the same court/date/startTime
-BookingSchema.index({ courtId: 1, date: 1, startTime: 1 }, { unique: true });
-
-// Helpful secondary index if you often query by email
-BookingSchema.index({ email: 1, date: -1 });
+// Optional helper index to quickly detect conflicts per day/court/start
+// BookingSchema.index({ date: 1, "slots.courtId": 1, "slots.start": 1 });
 
 export const Booking =
   (models.Booking as mongoose.Model<BookingDoc>) ||
