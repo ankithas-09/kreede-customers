@@ -22,7 +22,7 @@ type Booking = {
   paymentRaw?: unknown;
 };
 
-type MeUser = { id: string; userId: string; name?: string; email: string; phone?: string };
+type MeUser = { id: string; userId?: string; name?: string; email: string; phone?: string };
 
 type DisplayItem = {
   key: string;
@@ -117,15 +117,18 @@ export default function MyBookingsPage() {
     return () => { alive = false; };
   }, []);
 
-  // bookings for this user
-  const loadBookings = async (uid: string) => {
+  // bookings for this user (by userId OR email fallback)
+  const loadBookings = async (uid: string, email?: string) => {
     setLoading(true);
     try {
-      const res = await fetch(`/api/bookings?userId=${encodeURIComponent(uid)}`, {
+      const qs = new URLSearchParams();
+      if (uid) qs.set("userId", uid);
+      if (email) qs.set("email", email);
+      const res = await fetch(`/api/bookings?${qs.toString()}`, {
         cache: "no-store",
         credentials: "include",
       });
-      const j = await res.json();
+      const j: { ok?: boolean; error?: string; bookings?: Booking[] } = await res.json();
       if (!res.ok || !j.ok) throw new Error(j?.error || "Failed to load bookings");
       setBookings(j.bookings || []);
     } catch (e: unknown) {
@@ -137,8 +140,8 @@ export default function MyBookingsPage() {
   };
 
   useEffect(() => {
-    if (user?.id) loadBookings(user.id);
-  }, [user?.id]);
+    if (user?.id) loadBookings(user.id, user.email);
+  }, [user?.id, user?.email]);
 
   // flatten each slot into one card
   const items: DisplayItem[] = useMemo(() => {
@@ -169,7 +172,8 @@ export default function MyBookingsPage() {
 
   const cancelSlot = async (it: DisplayItem) => {
     // UI guard (server also enforces)
-    if (!isCancelable(it.date, it.start, now)) {
+    const normStart = normalizeHHmm(it.start);
+    if (normStart && !isCancelable(it.date, normStart, now)) {
       alert("Cancellation window has closed (you can cancel until 2 hours before the slot).");
       return;
     }
@@ -186,10 +190,10 @@ export default function MyBookingsPage() {
           slotIndex: it.slotIndex,
         }),
       });
-      const j = await res.json();
+      const j: { ok?: boolean; error?: string } = await res.json();
       if (!res.ok || !j.ok) throw new Error(j?.error || "Cancellation failed.");
       // refresh list
-      if (user?.id) await loadBookings(user.id);
+      if (user?.id) await loadBookings(user.id, user.email);
       alert("Booking cancelled successfully.");
     } catch (e: unknown) {
       const message = e instanceof Error ? e.message : "Could not cancel booking.";
