@@ -1,0 +1,451 @@
+/* =========================
+   Global theme
+   ========================= */
+:root {
+  --bg: #111111;        /* black */
+  --fg: #FEF4E8;        /* off-white */
+  --green: #22c55e;     /* available */
+  --blue: #3b82f6;      /* selected */
+  --red: #ef4444;       /* booked */
+  --grey: #9ca3af;      /* disabled */
+  --accent: #F66E12;    /* CTA orange */
+  --space: 16px;        /* responsive spacing */
+}
+@media (min-width: 768px) { :root { --space: 20px; } }
+@media (min-width: 1024px) { :root { --space: 24px; } }
+
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+}
+
+/* =========================
+   Base elements
+   ========================= */
+a { color: inherit; text-decoration: none; }
+input, button { font: inherit; }
+
+/* Mobile-friendly inputs/buttons */
+input {
+  font-size: 16px;        /* prevent iOS zoom */
+  min-height: 44px;       /* accessible tap target */
+  width: 100%;
+}
+.btn {
+  appearance: none;
+  border: 0;
+  cursor: pointer;
+  border-radius: 12px;
+  padding: 10px 12px;
+  color: #fff;
+  font-weight: 700;
+  min-height: 44px;
+  line-height: 1.2;
+}
+.btn:disabled { opacity: .55; cursor: not-allowed; }
+@media (max-width: 480px) {
+  .center-stack .btn { width: 100%; }
+}
+
+/* =========================
+   Layout helpers
+   ========================= */
+.container {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: calc(var(--space) + 8px) var(--space);
+}
+.row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.grid { display: grid; gap: 12px; }
+.grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+@media (min-width: 768px) {
+  .grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
+/* Card */
+.card {
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 16px;
+  padding: var(--space);
+}
+
+/* Stack helper: place content (like event chips) right under a card in the same grid column */
+.card-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* =========================
+   Booking UI (Slots + Legend)
+   ========================= */
+.slot {
+  width: 100%;
+  padding: 10px 8px;
+  border-radius: 10px;
+  text-align: center;
+  font-weight: 700;
+  color: #111;
+  transition: transform .06s ease, filter .1s ease;
+}
+.slot:hover { transform: translateY(-1px); }
+.slot-available { background: var(--green); }
+.slot-selected  { background: var(--blue); color: #fff; }
+.slot-booked    { background: var(--red);  color: #fff; }
+.slot-disabled  { background: var(--grey); color: #111; filter: grayscale(0.2) brightness(0.9); }
+
+.legend { display: flex; gap: 16px; flex-wrap: wrap; font-size: 14px; }
+.dot { width: 14px; height: 14px; border-radius: 4px; display: inline-block; }
+.dot-green { background: var(--green); }
+.dot-blue  { background: var(--blue); }
+.dot-red   { background: var(--red); }
+.dot-grey  { background: var(--grey); }
+
+/* Sticky bottom bar for mobile */
+.sticky-bar {
+  position: sticky;
+  bottom: 0;
+  z-index: 20;
+  background: linear-gradient(180deg, rgba(17,17,17,0) 0%, rgba(17,17,17,1) 35%);
+  padding-top: 12px;
+  margin-top: 12px;
+}
+
+/* =========================
+   Home Hero (Background, Title, Buttons)
+   ========================= */
+.hero {
+  position: relative;
+  min-height: 100dvh;                      /* better on iOS */
+  width: 100%;
+  background: url("/background.png") center / cover no-repeat fixed;
+  color: var(--fg);
+  padding-bottom: env(safe-area-inset-bottom);
+  overflow-y: auto;                         /* allow scroll when content overflows */
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Disable fixed bg on phones/tablets for smoother scroll */
+@media (max-width: 1024px) {
+  .hero { background: url("/background.png") center / cover no-repeat; }
+}
+
+/* dark overlay */
+.hero::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: rgba(0,0,0,0.6);
+  z-index: 0;
+}
+
+/* Title */
+.hero-header {
+  position: absolute;
+  top: calc(env(safe-area-inset-top) + 16px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 3;
+  text-align: center;
+  padding: 0 12px;
+}
+.hero-title {
+  margin: 0;
+  font-weight: 900;
+  line-height: 1.1;
+  font-size: clamp(2rem, 6vw, 3.5rem);
+  text-shadow: 0 2px 10px rgba(0,0,0,0.45);
+}
+
+/* Center content */
+.hero-center {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  place-content: start center;      /* start vertically, center horizontally */
+  row-gap: 24px;
+  padding: clamp(16px, 4vw, 28px);
+  padding-bottom: max(28px, env(safe-area-inset-bottom));
+  padding-top: var(--hero-header-space);
+}
+
+/* Vertically center ONLY the choice screen */
+.hero-center.choice-mode {
+  min-height: 100dvh;
+  place-content: center;
+  padding-top: 0;
+}
+
+/* Buttons stack */
+.center-stack {
+  width: 100%;
+  max-width: 320px;
+  display: grid;
+  gap: 12px;
+}
+
+.center-stack .btn {
+  width: 750px;
+  max-width: 280px;      /* slightly wider buttons */
+  justify-self: center;
+  padding: 14px 20px;    /* bigger touch area */
+  font-size: 1.05rem;    /* subtle readability bump */
+}
+.btn-primary { background: var(--accent); }
+.btn-ghost   { background: rgba(255,255,255,0.2); }
+.btn-ghost:hover { filter: brightness(1.1); }
+
+/* =========================
+   Auth Panels (Sign In / Sign Up)
+   ========================= */
+.form-panel {
+  width: min(92vw, 560px);
+  background: #000;
+  color: var(--fg);
+  border-radius: 16px;
+  border: 1px solid rgba(255,255,255,0.18);
+  box-shadow: 0 10px 30px rgba(0,0,0,0.55);
+  padding: var(--space);
+}
+.form-panel h2 {
+  margin: 0 0 12px 0;
+  font-weight: 800;
+}
+.form-panel .links { margin-top: 6px; font-size: 14px; }
+.form-panel .back  { margin-top: 8px; }
+
+/* Push form below the title */
+.form-offset { margin-top: clamp(24px, 6vw, 36px); }
+
+/* Tablet (iPad) adjustments */
+@media (min-width: 768px) and (max-width: 1024px) {
+  .form-panel {
+    max-height: calc(100dvh - 180px); /* ensure it fits */
+    overflow: auto;                   /* scroll within form if tall */
+  }
+  .form-offset { margin-top: 24px; }
+  .btn { padding: 10px 14px; }
+  input { min-height: 42px; }
+}
+
+/* Small phones */
+@media (max-width: 480px) {
+  .card, .form-panel { border-radius: 12px; }
+  .center-stack .btn { width: 100%; }
+}
+
+/* Accessibility */
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; animation: none !important; }
+}
+
+/* =========================
+   Heading / Notch spacing
+   ========================= */
+:root {
+  --hero-header-space: 96px;               /* default phones */
+}
+@media (min-width: 768px) {
+  :root { --hero-header-space: 108px; }    /* tablets */
+}
+@media (min-width: 1024px) {
+  :root { --hero-header-space: 120px; }    /* desktops */
+}
+
+/* (Optional) top-right logo helper */
+.logo-top-right {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  z-index: 3;
+}
+
+/* =========================
+   Top-right buttons unified
+   ========================= */
+.top-actions {
+  position: absolute;
+  top: calc(env(safe-area-inset-top) + 16px);
+  right: 16px;
+  z-index: 4;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+/* Unified button styling for My Bookings + Profile dropdown trigger */
+.top-actions .action-button,
+.menu-button {
+  background: rgba(0, 0, 0, 0.6);
+  color: var(--fg);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 12px;
+  padding: 8px 14px;
+  font-weight: 700;
+  font-size: 0.95rem;
+  min-height: 44px;
+  cursor: pointer;
+  transition: filter 0.15s ease;
+}
+.top-actions .action-button:hover,
+.menu-button:hover {
+  filter: brightness(1.1);
+}
+.top-actions .userbar { position: static; }
+
+/* Dropdown menu stays aligned with the Profile button */
+.menu-list {
+  position: absolute;
+  right: 0;
+  margin-top: 8px;
+  min-width: 200px;
+  background: #000;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 12px;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.45);
+  padding: 6px;
+  z-index: 6;
+}
+.menu-item {
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  color: var(--fg);
+  border: 0;
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-weight: 600;
+}
+.menu-item:hover { background: rgba(255,255,255,0.08); }
+.menu-item.danger { color: #ffb4b4; }
+
+/* ======= Dashboard grid ======= */
+.dashboard-grid {
+  width: 100%;
+  display: grid;
+  gap: 16px;
+  grid-template-columns: 1fr;                 /* mobile */
+}
+@media (min-width: 640px) {
+  .dashboard-grid { grid-template-columns: repeat(2, minmax(0,1fr)); }
+}
+@media (min-width: 1024px) {
+  .dashboard-grid { grid-template-columns: repeat(3, minmax(0,1fr)); }
+}
+
+.card-cta {
+  cursor: pointer;
+  user-select: none;
+  transition: transform .08s ease, box-shadow .12s ease, background .2s ease;
+  backdrop-filter: blur(2px);
+}
+.card-cta h2 {
+  margin: 0 0 6px 0;
+  font-size: clamp(1.1rem, 2.2vw, 1.4rem);
+  font-weight: 900;
+}
+.card-cta p {
+  margin: 0;
+  opacity: 0.9;
+}
+.card-cta:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 14px 32px rgba(0,0,0,0.35);
+  background: rgba(255,255,255,0.06);
+}
+
+/* Vertically center dashboard boxes */
+.hero-center.dashboard-mode {
+  min-height: 100dvh;
+  place-content: center;   /* centers grid vertically + horizontally */
+  padding-top: 0;
+}
+
+/* =========================
+   Booking Page: Off-white theme
+   ========================= */
+.book-page {
+  background-color: #FEF4E8;  /* off-white */
+  min-height: 100dvh;
+  color: #111;
+}
+
+/* Light cards on booking page */
+.book-page .card {
+  background: rgba(0,0,0,0.04);
+  border: 1px solid rgba(0,0,0,0.12);
+  color: #111;
+}
+
+/* Light sticky bar variant */
+.sticky-bar.light {
+  background: linear-gradient(180deg, rgba(254,244,232,0) 0%, rgba(254,244,232,1) 35%);
+  border-top: 1px solid rgba(0,0,0,0.08);
+}
+
+/* Typography in book page defaults to dark */
+.book-page h1,
+.book-page h2,
+.book-page p,
+.book-page label,
+.book-page .legend {
+  color: #111;
+}
+
+/* Inputs on book page default to light */
+.book-page input[type="date"],
+.book-page input[type="text"],
+.book-page input[type="email"],
+.book-page input[type="tel"],
+.book-page input[type="number"] {
+  background: #fff;
+  color: #111;
+  border: 1px solid rgba(0,0,0,0.15);
+}
+
+/* Keep slot colors consistent (already set globally) */
+.book-page .slot-available { background: var(--green); color: #fff; }
+.book-page .slot-selected  { background: var(--blue);  color: #fff; }
+.book-page .slot-booked    { background: var(--red);   color: #fff; }
+.book-page .slot-disabled  { background: var(--grey);  color: #111; }
+
+/* =========================
+   Events strip (under Events card)
+   ========================= */
+.events-strip {
+  width: 100%;
+  margin-top: 12px;
+}
+
+/* When used right beneath the card, remove extra top spacing */
+.events-strip.no-title {
+  margin-top: 0;
+}
+
+.events-strip__list {
+  display: flex;
+  gap: 10px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+
+.event-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(255,255,255,0.14);
+  border: 1px solid rgba(255,255,255,0.2);
+  color: var(--fg);
+  padding: 10px 12px;
+  border-radius: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: transform .06s ease, background .15s ease;
+}
+.event-chip:hover { transform: translateY(-1px); background: rgba(255,255,255,0.18); }
+.event-chip__dot { width: 8px; height: 8px; border-radius: 999px; background: var(--accent); }
+.event-chip__text { font-weight: 800; font-size: 0.95rem; }
