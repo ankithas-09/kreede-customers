@@ -1,3 +1,4 @@
+// app/book/checkout/CheckoutClient.tsx
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
@@ -31,14 +32,31 @@ type UserSession = { id: string; name?: string; email: string; phone?: string };
 type PendingBooking = {
   date: string;
   selections: Selection[];
-  amount: number; // actually charged amount
+  amount: number;
 };
+
+type GuestInfo = { name: string; phone: string; at?: number };
 
 function getClientId(): string {
   if (typeof window === "undefined") return "";
   const KEY = "kreede:clientId";
   const existing = localStorage.getItem(KEY);
   return existing || "";
+}
+
+function getGuest(): GuestInfo | null {
+  if (typeof window === "undefined") return null;
+  const raw = sessionStorage.getItem("kreede:guest");
+  if (!raw) return null;
+  try {
+    const obj = JSON.parse(raw) as GuestInfo;
+    if (obj && obj.name && obj.phone) return obj;
+  } catch {}
+  return null;
+}
+
+function isGuestModeFromQP(qp: URLSearchParams): boolean {
+  return qp.get("guest") === "1";
 }
 
 async function releaseHolds(date: string, selections: Selection[]) {
@@ -51,6 +69,19 @@ async function releaseHolds(date: string, selections: Selection[]) {
       body: JSON.stringify({ date, clientId, selections }),
     });
   } catch {}
+}
+
+// Safe JSON parse helper (handles HTML error pages gracefully)
+async function parseJsonSafe<T = unknown>(
+  res: Response
+): Promise<{ ok: boolean; data?: T; text: string }> {
+  const text = await res.text();
+  try {
+    const data = JSON.parse(text) as T;
+    return { ok: true, data, text };
+  } catch {
+    return { ok: false, text };
+  }
 }
 
 export default function CheckoutClient() {
@@ -66,10 +97,14 @@ export default function CheckoutClient() {
   const [loading, setLoading] = useState(false);
   const [membership, setMembership] = useState<ActiveMembership | null>(null);
   const [user, setUser] = useState<UserSession | null>(null);
-  const env = process.env.NEXT_PUBLIC_CASHFREE_ENV || "sandbox";
+  const [guestConfirmed, setGuestConfirmed] = useState(false); // ✅ show success banner for guests
 
-  // 1) Load signed-in user from cookie via /api/auth/me (survives refresh)
+  const env = process.env.NEXT_PUBLIC_CASHFREE_ENV || "sandbox";
+  const isGuestMode = isGuestModeFromQP(qp) || !!getGuest();
+
+  // 1) Load signed-in user (members only). Guests don't need it.
   useEffect(() => {
+    if (isGuestMode) return;
     let alive = true;
     (async () => {
       try {
@@ -88,33 +123,34 @@ export default function CheckoutClient() {
     return () => {
       alive = false;
     };
-  }, []);
+  }, [isGuestMode]);
 
-  // 2) Load active membership (if any) once user is known
+  // 2) Load active membership (members only)
   useEffect(() => {
-    if (!user?.id) return;
+    if (isGuestMode || !user?.id) return;
     fetch(`/api/memberships/active?userId=${encodeURIComponent(user.id)}`, { cache: "no-store" })
       .then((r) => r.json())
       .then((j) => {
         if (j?.ok) setMembership(j.membership || null);
       })
       .catch(() => {});
-  }, [user?.id]);
+  }, [user?.id, isGuestMode]);
 
   const remaining = membership?.remaining ?? 0;
-  const freeCovered = Math.min(remaining, totalSlots);
-  const payableSlots = Math.max(0, totalSlots - remaining);
+  const freeCovered = isGuestMode ? 0 : Math.min(remaining, totalSlots);
+  const payableSlots = isGuestMode ? totalSlots : Math.max(0, totalSlots - remaining);
   const toPayAmount = payableSlots * PRICE_PER_SLOT;
 
-  // 3) On Cashfree redirect back → confirm booking & store in DB
+  // 3) Handle Cashfree redirect → confirm booking & store in DB
   useEffect(() => {
     const orderId = qp.get("order_id");
     if (!orderId) return;
 
-    const raw = typeof window !== "undefined" ? sessionStorage.getItem("kreede:pendingBooking") : null;
+    const raw =
+      typeof window !== "undefined" ? sessionStorage.getItem("kreede:pendingBooking") : null;
     const pending: PendingBooking | null = raw ? JSON.parse(raw) : null;
 
-    if (!pending || !user) {
+    if (!pending) {
       router.replace("/home");
       return;
     }
@@ -122,33 +158,74 @@ export default function CheckoutClient() {
     (async () => {
       setLoading(true);
       try {
-        const res = await fetch("/api/payments/cashfree/confirm", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          credentials: "include",
-          body: JSON.stringify({
-            orderId,
-            user: { id: user.id, name: user.name, email: user.email, phone: user.phone },
-            date: pending.date,
-            selections: pending.selections,
-            amount: pending.amount,
-            clientId: getClientId(), // ensure only the holder can finalize
-          }),
-        });
-        await res.json().catch(() => ({}));
-        // Clear holds on success (or even if server already processed)
-        await releaseHolds(pending.date, pending.selections);
+        if (isGuestMode) {
+          const guest = getGuest();
+          if (!guest) {
+            router.replace("/");
+            return;
+          }
+          // Guest booking confirm
+          const res = await fetch("/api/guest/payments/cashfree/confirm", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              orderId,
+              guest, // { name, phone }
+              date: pending.date,
+              selections: pending.selections,
+              amount: pending.amount,
+              clientId: getClientId(),
+            }),
+          });
+          await res.text().catch(() => {});
+          await releaseHolds(pending.date, pending.selections);
+
+          // ✅ Show "Booking Confirmed" for guests, then redirect
+          setGuestConfirmed(true);
+          sessionStorage.removeItem("kreede:pendingBooking");
+          setLoading(false);
+          setTimeout(() => router.replace("/home"), 2000);
+          return; // IMPORTANT: stop here (don’t run the finally redirect below)
+        } else {
+          // Member booking confirm
+          if (!user) {
+            router.replace("/");
+            return;
+          }
+          const res = await fetch("/api/payments/cashfree/confirm", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            credentials: "include",
+            body: JSON.stringify({
+              orderId,
+              user: { id: user.id, name: user.name, email: user.email, phone: user.phone },
+              date: pending.date,
+              selections: pending.selections,
+              amount: pending.amount,
+              clientId: getClientId(),
+            }),
+          });
+          await res.text().catch(() => {});
+          await releaseHolds(pending.date, pending.selections);
+
+          // Members: go home immediately
+          sessionStorage.removeItem("kreede:pendingBooking");
+          setLoading(false);
+          router.replace("/home");
+          return;
+        }
       } catch {
         // swallow and continue
       } finally {
+        // Fallback cleanup in case we didn't early-return above
         sessionStorage.removeItem("kreede:pendingBooking");
         setLoading(false);
-        router.replace("/home");
       }
     })();
-  }, [qp, router, user]);
+  }, [qp, router, user, isGuestMode]);
 
   const freeBook = async () => {
+    if (isGuestMode) return;
     if (!selections.length || !user) {
       alert("Missing slot selection or user session");
       router.push("/");
@@ -164,7 +241,6 @@ export default function CheckoutClient() {
       });
       const j = await res.json();
       if (!res.ok || !j.ok) throw new Error(j?.error || "Could not book with membership.");
-      // release the held slots now that booking is done
       await releaseHolds(date, selections);
       router.replace("/home");
     } catch (e: unknown) {
@@ -176,11 +252,16 @@ export default function CheckoutClient() {
   };
 
   const payNow = async () => {
-    if (!selections.length || !user) {
-      alert("Missing slot selection or user session");
+    if (!selections.length) {
+      alert("No slots selected.");
+      return;
+    }
+    if (!isGuestMode && !user) {
+      alert("Please sign in again.");
       router.push("/");
       return;
     }
+
     setLoading(true);
     try {
       const chargeAmount = toPayAmount > 0 ? toPayAmount : grossTotal;
@@ -189,31 +270,82 @@ export default function CheckoutClient() {
       const pending: PendingBooking = { date, selections, amount: chargeAmount };
       sessionStorage.setItem("kreede:pendingBooking", JSON.stringify(pending));
 
-      // Create order
-      const res = await fetch("/api/payments/cashfree/order", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({
-          amount: chargeAmount,
-          currency: "INR",
-          customer: {
-            id: user.id,
-            name: user.name || "Guest User",
-            email: user.email,
-            phone: user.phone || "9999999999",
-          },
-        }),
-      });
-      const j = await res.json();
-      if (!res.ok) throw new Error(j?.error || "Failed to create order");
+      // Create order and extract a DEFINITE string paymentSessionId
+      let paymentSessionId: string = "";
+
+      if (isGuestMode) {
+        const guest = getGuest();
+        if (!guest) throw new Error("Guest info missing.");
+        const res = await fetch("/api/guest/payments/cashfree/order", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            amount: chargeAmount,
+            currency: "INR",
+            guest, // { name, phone }
+          }),
+        });
+        const parsed = await parseJsonSafe<{
+          paymentSessionId?: unknown;
+          payment_session_id?: unknown;
+          error?: string;
+        }>(res);
+        if (!res.ok || !parsed.ok || !parsed.data) {
+          const msg =
+            (parsed.data && (parsed.data as { error?: string }).error) ||
+            `Failed to create order (guest) [${res.status}]`;
+          throw new Error(msg);
+        }
+        const d = parsed.data;
+        const maybe =
+          (d.paymentSessionId as string | undefined) ??
+          (d.payment_session_id as string | undefined);
+        paymentSessionId = typeof maybe === "string" ? maybe : "";
+      } else {
+        // Member flow
+        const res = await fetch("/api/payments/cashfree/order", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({
+            amount: chargeAmount,
+            currency: "INR",
+            customer: {
+              id: user!.id,
+              name: user!.name || "Member",
+              email: user!.email,
+              phone: user!.phone || "9999999999",
+            },
+          }),
+        });
+        const parsed = await parseJsonSafe<{
+          paymentSessionId?: unknown;
+          payment_session_id?: unknown;
+          error?: string;
+        }>(res);
+        if (!res.ok || !parsed.ok || !parsed.data) {
+          const msg =
+            (parsed.data && (parsed.data as { error?: string }).error) ||
+            `Failed to create order [${res.status}]`;
+          throw new Error(msg);
+        }
+        const d = parsed.data;
+        const maybe =
+          (d.paymentSessionId as string | undefined) ??
+          (d.payment_session_id as string | undefined);
+        paymentSessionId = typeof maybe === "string" ? maybe : "";
+      }
+
+      if (!paymentSessionId) {
+        throw new Error("Payment session ID missing from gateway.");
+      }
 
       // Load CF SDK and open checkout
       const { load } = await import("@cashfreepayments/cashfree-js");
       const cashfree = await load({ mode: env as "sandbox" | "production" });
 
       await cashfree.checkout({
-        paymentSessionId: j.paymentSessionId,
+        paymentSessionId, // definitely a string
         redirectTarget: "_self",
       });
     } catch (e: unknown) {
@@ -232,6 +364,22 @@ export default function CheckoutClient() {
         <h1 style={{ fontSize: 24, fontWeight: 900, marginBottom: 12, color: "#111" }}>
           Checkout
         </h1>
+
+        {/* ✅ Guest success banner */}
+        {guestConfirmed && (
+          <div
+            className="card"
+            style={{
+              marginBottom: 16,
+              borderColor: "rgba(34,197,94,0.35)",
+              background: "rgba(34,197,94,0.08)",
+              color: "#065f46",
+              fontWeight: 800,
+            }}
+          >
+            ✅ Booking Confirmed! Redirecting to home…
+          </div>
+        )}
 
         <div className="card" style={{ marginBottom: 16 }}>
           <div className="row" style={{ justifyContent: "space-between" }}>
@@ -291,7 +439,7 @@ export default function CheckoutClient() {
                 </tbody>
               </table>
 
-              {membership && (
+              {!isGuestMode && membership && (
                 <div style={{ marginTop: 10, color: "#111" }}>
                   <div style={{ fontWeight: 800 }}>
                     Membership: {membership.planName} • {membership.remaining} game(s) remaining
@@ -308,6 +456,14 @@ export default function CheckoutClient() {
                   )}
                 </div>
               )}
+
+              {isGuestMode && (
+                <div style={{ marginTop: 10, color: "#111" }}>
+                  <div style={{ fontWeight: 800 }}>
+                    Guest checkout • You’ll be charged now: ₹{grossTotal}
+                  </div>
+                </div>
+              )}
             </>
           )}
         </div>
@@ -317,7 +473,7 @@ export default function CheckoutClient() {
             ← Back
           </a>
 
-          {membership && remaining >= totalSlots ? (
+          {!isGuestMode && membership && remaining >= totalSlots ? (
             <button
               className="btn"
               style={{ background: "var(--accent)" }}
@@ -333,10 +489,12 @@ export default function CheckoutClient() {
               className="btn"
               style={{ background: "var(--accent)" }}
               onClick={payNow}
-              disabled={!selections.length || loading || !user}
+              disabled={!selections.length || loading || (!isGuestMode && !user)}
             >
               {loading
                 ? "Opening Checkout…"
+                : isGuestMode
+                ? `Pay ₹${grossTotal}`
                 : toPayAmount > 0
                 ? `Pay ₹${toPayAmount}`
                 : "Proceed to Pay"}
