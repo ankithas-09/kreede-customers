@@ -11,6 +11,7 @@ export interface GuestBookingDoc extends mongoose.Document {
   orderId: string;                 // guest order id (unique/idempotent)
   userName?: string;
   userEmail?: string;
+  phone_number?: string;           // ← NEW: store guest phone number
 
   date: string;                    // "YYYY-MM-DD"
   slots: GuestSlotItem[];          // selected slots
@@ -35,9 +36,10 @@ const GuestSlotSchema = new Schema<GuestSlotItem>(
 
 const GuestBookingSchema = new Schema<GuestBookingDoc>(
   {
-    orderId:   { type: String, required: true, unique: true, index: true },
-    userName:  { type: String },
-    userEmail: { type: String, index: true },
+    orderId:     { type: String, required: true, unique: true, index: true },
+    userName:    { type: String },
+    userEmail:   { type: String, index: true },
+    phone_number:{ type: String, index: true },  // ← NEW: persisted as `phone_number`
 
     date:   { type: String, required: true, index: true }, // YYYY-MM-DD
     slots:  { type: [GuestSlotSchema], required: true },

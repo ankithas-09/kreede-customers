@@ -49,13 +49,14 @@ async function getOrderPayments(orderId: string): Promise<Payment[]> {
 export async function POST(req: NextRequest) {
   await dbConnect();
 
-  // NOTE: clientId omitted since it's not used here (keeps logic identical, fixes lint warning)
+  // Note: we don't need clientId here; removing unused binding avoids lint warning.
   const { orderId, guest, date, selections, amount } = (await req.json()) as {
     orderId?: string;
-    guest?: { name?: string; phone?: string };
+    guest?: { name?: string; phone?: string; email?: string };
     date?: string;
     selections?: Selection[];
     amount?: number;
+    clientId?: string;
   };
 
   if (
@@ -69,7 +70,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: false, error: "Missing fields" }, { status: 400 });
   }
 
-  // Verify payment with Cashfree
+  // 1) Verify payment with Cashfree
   const payments = await getOrderPayments(orderId);
   const paid = payments.some((p) => (p.payment_status || p.status) === "SUCCESS");
   if (!paid) {
@@ -79,26 +80,28 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // Upsert guest booking (idempotent on orderId)
-  const doc = {
+  // 2) Upsert guest booking (idempotent on orderId) and store the phone number
+  const updateDoc = {
     orderId,
-    userName: guest.name,
-    userEmail: undefined,
+    userName: guest.name || "",
+    userEmail: guest.email || "",
+    phone_number: guest.phone || "", // ← NEW: persist phone number
     date,
     slots: selections.map((s) => ({ courtId: s.courtId, start: s.start, end: s.end })),
     amount,
     currency: "INR" as const,
     status: "PAID" as const,
+    paymentRef: "PAID.CASH",        // keep your existing convention if you rely on it
     paymentRaw: payments,
   };
 
   await GuestBooking.findOneAndUpdate(
     { orderId },
-    doc,
+    updateDoc,
     { upsert: true, new: true, setDefaultsOnInsert: true, runValidators: true, strict: true }
   );
 
-  // cleanup holds (best effort)
+  // 3) Best-effort: clear holds for these slots
   try {
     await SlotHold.deleteMany({
       date,
@@ -109,5 +112,12 @@ export async function POST(req: NextRequest) {
   }
 
   const saved = await GuestBooking.findOne({ orderId }).lean();
-  return NextResponse.json({ ok: true, booking: saved });
+  if (!saved?._id) {
+    return NextResponse.json(
+      { ok: false, error: "Guest booking write failed (not found after upsert)." },
+      { status: 500 }
+    );
+  }
+
+  return NextResponse.json({ ok: true, bookingId: String(saved._id), booking: saved });
 }
