@@ -113,6 +113,9 @@ export default function CheckoutClient() {
   const [userReady, setUserReady] = useState(false);
   const [membershipReady, setMembershipReady] = useState(false);
 
+  // kept (unused visually now) but harmless
+  const [guestConfirmed, setGuestConfirmed] = useState(false);
+
   const env = process.env.NEXT_PUBLIC_CASHFREE_ENV || "sandbox";
   const isGuestMode = isGuestModeFromQP(qp) || !!getGuest();
 
