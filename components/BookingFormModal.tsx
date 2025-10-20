@@ -4,14 +4,23 @@ import { useMemo, useState } from "react";
 
 type Selection = { courtId: number; start: string; end: string };
 
+// ---- Dynamic pricing: weekdays ₹500, weekends ₹700 ----
+function isWeekend(dateStr: string) {
+  const d = new Date(`${dateStr}T00:00:00`);
+  const day = d.getDay(); // 0 = Sun, 6 = Sat
+  return day === 0 || day === 6;
+}
+function getPriceForDate(dateStr: string) {
+  return isWeekend(dateStr) ? 700 : 500;
+}
+
 type Props = {
   open: boolean;
   date: string;
   selections: Selection[];
+  /** Optional override; if omitted we compute from date */
   pricePerSlot?: number;
-  /** Rename to satisfy Next.js serializable-props rule for client entry files */
   onCloseAction: () => void;
-  /** Rename to satisfy Next.js serializable-props rule for client entry files */
   onSuccessAction: () => void; // refetch after success
 };
 
@@ -19,7 +28,7 @@ export default function BookingFormModal({
   open,
   date,
   selections,
-  pricePerSlot = 500,
+  pricePerSlot,
   onCloseAction,
   onSuccessAction,
 }: Props) {
@@ -29,9 +38,15 @@ export default function BookingFormModal({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
 
+  // Compute dynamic price if not provided explicitly
+  const unitPrice = useMemo(
+    () => (pricePerSlot ?? getPriceForDate(date)),
+    [pricePerSlot, date]
+  );
+
   const total = useMemo(
-    () => selections.length * pricePerSlot,
-    [selections, pricePerSlot]
+    () => selections.length * unitPrice,
+    [selections, unitPrice]
   );
 
   const submit = async () => {
@@ -136,7 +151,7 @@ export default function BookingFormModal({
           </label>
 
           <div style={{ display: "flex", justifyContent: "space-between", marginTop: 6 }}>
-            <div style={{ opacity: 0.8 }}>Total (₹{pricePerSlot}/slot)</div>
+            <div style={{ opacity: 0.8 }}>Total (₹{unitPrice}/slot)</div>
             <div style={{ fontWeight: 800 }}>₹ {total}</div>
           </div>
 

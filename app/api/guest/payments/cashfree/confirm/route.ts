@@ -49,14 +49,13 @@ async function getOrderPayments(orderId: string): Promise<Payment[]> {
 export async function POST(req: NextRequest) {
   await dbConnect();
 
-  // Rename clientId -> _clientId to avoid "unused" warning while keeping the payload shape
-  const { orderId, guest, date, selections, amount, clientId: _clientId } = (await req.json()) as {
+  // NOTE: clientId omitted since it's not used here (keeps logic identical, fixes lint warning)
+  const { orderId, guest, date, selections, amount } = (await req.json()) as {
     orderId?: string;
     guest?: { name?: string; phone?: string };
     date?: string;
     selections?: Selection[];
     amount?: number;
-    clientId?: string;
   };
 
   if (

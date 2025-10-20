@@ -4,7 +4,16 @@ import { dbConnect } from "@/lib/db";
 import { Booking } from "@/models/Booking";
 import { Order } from "@/models/Order";
 
-const PRICE_PER_SLOT = 500;
+// ---- Dynamic pricing: weekdays ₹500, weekends ₹700 ----
+function isWeekend(dateStr: string) {
+  // Interpret date in local time to avoid TZ surprises
+  const d = new Date(`${dateStr}T00:00:00`);
+  const day = d.getDay(); // 0 = Sun, 6 = Sat
+  return day === 0 || day === 6;
+}
+function getPriceForDate(dateStr: string) {
+  return isWeekend(dateStr) ? 700 : 500;
+}
 
 type SelectionIn = { courtId: number; startTime: string; endTime: string };
 type InsertedDoc = { courtId: number; date: string; startTime: string; endTime: string };
@@ -25,6 +34,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Invalid payload" }, { status: 400 });
   }
 
+  // Dynamic unit price for this date
+  const unitPrice = getPriceForDate(date);
+
   // Normalize docs & total
   const slotDocs = selections.map((s) => ({
     courtId: s.courtId,
@@ -34,24 +46,23 @@ export async function POST(req: NextRequest) {
     name,
     email,
     phone,
-    price: PRICE_PER_SLOT,
+    price: unitPrice,               // ← per-slot price stored
     status: "confirmed" as const,
   }));
-  const amountPaid = slotDocs.length * PRICE_PER_SLOT;
+  const amountPaid = slotDocs.length * unitPrice; // ← dynamic total
 
   const session = await mongoose.startSession();
   let insertedDocs: InsertedDoc[] = [];
 
   try {
     await session.withTransaction(async () => {
-      // 1) Insert per-slot bookings (unique index prevents double-book)
-      //    ordered:true means it will stop on first duplicate error (which is OK here)
+      // 1) Insert per-slot bookings
       const inserted = await Booking.insertMany(slotDocs, {
         session,
         ordered: true,
       });
 
-      // Keep only the fields we need outside the transaction (without using `any`)
+      // Extract only needed fields
       insertedDocs = inserted.map((d) => {
         const doc = d as unknown as InsertedDoc;
         return {
@@ -62,7 +73,7 @@ export async function POST(req: NextRequest) {
         };
       });
 
-      // 2) Insert a single Order with user + slots + total
+      // 2) Insert single Order with total
       await Order.create(
         [
           {
@@ -84,7 +95,6 @@ export async function POST(req: NextRequest) {
       );
     });
 
-    // If we get here, the transaction was committed
     return NextResponse.json({
       success: true,
       booked: insertedDocs.map((d) => ({
@@ -96,7 +106,6 @@ export async function POST(req: NextRequest) {
       amountPaid,
     });
   } catch (err: unknown) {
-    // If the error came from a unique index violation, surface a friendly message
     const message = err instanceof Error ? err.message : "";
     const code =
       typeof err === "object" && err !== null && "code" in err
@@ -113,7 +122,6 @@ export async function POST(req: NextRequest) {
       { status: isDup ? 409 : 500 }
     );
   } finally {
-    // Always end the session; DO NOT abort after a successful commit
     await session.endSession();
   }
 }

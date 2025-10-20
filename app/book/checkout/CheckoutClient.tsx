@@ -5,7 +5,16 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
 type Selection = { courtId: number; start: string; end: string };
-const PRICE_PER_SLOT = 500;
+
+// ---- Dynamic pricing: weekdays ₹500, weekends ₹700 ----
+function isWeekend(dateStr: string) {
+  const d = new Date(`${dateStr}T00:00:00`);
+  const day = d.getDay(); // 0 = Sun, 6 = Sat
+  return day === 0 || day === 6;
+}
+function getPriceForDate(dateStr: string) {
+  return isWeekend(dateStr) ? 700 : 500;
+}
 
 function decodeSelections(s: string | null): Selection[] {
   if (!s) return [];
@@ -35,7 +44,7 @@ type PendingBooking = {
   amount: number;
 };
 
-type GuestInfo = { name: string; phone: string; at?: number };
+type GuestInfo = { name: string; phone: string; email?: string; at?: number };
 
 function getClientId(): string {
   if (typeof window === "undefined") return "";
@@ -71,7 +80,6 @@ async function releaseHolds(date: string, selections: Selection[]) {
   } catch {}
 }
 
-// Safe JSON parse helper (handles HTML error pages gracefully)
 async function parseJsonSafe<T = unknown>(
   res: Response
 ): Promise<{ ok: boolean; data?: T; text: string }> {
@@ -91,20 +99,30 @@ export default function CheckoutClient() {
   const date = qp.get("date") || new Date().toISOString().slice(0, 10);
   const selections = useMemo(() => decodeSelections(qp.get("sel")), [qp]);
 
+  // 🔢 Dynamic price for this checkout date
+  const pricePerSlot = getPriceForDate(date);
+
   const totalSlots = selections.length;
-  const grossTotal = totalSlots * PRICE_PER_SLOT;
+  const grossTotal = totalSlots * pricePerSlot;
 
   const [loading, setLoading] = useState(false);
   const [membership, setMembership] = useState<ActiveMembership | null>(null);
   const [user, setUser] = useState<UserSession | null>(null);
-  const [guestConfirmed, setGuestConfirmed] = useState(false); // ✅ show success banner for guests
+
+  // Gates so we don't accidentally show/trigger the pay flow before membership is known
+  const [userReady, setUserReady] = useState(false);
+  const [membershipReady, setMembershipReady] = useState(false);
 
   const env = process.env.NEXT_PUBLIC_CASHFREE_ENV || "sandbox";
   const isGuestMode = isGuestModeFromQP(qp) || !!getGuest();
 
-  // 1) Load signed-in user (members only). Guests don't need it.
+  // 1) Load signed-in user (not for guests)
   useEffect(() => {
-    if (isGuestMode) return;
+    if (isGuestMode) {
+      setUserReady(true);
+      setMembershipReady(true); // membership irrelevant for guests
+      return;
+    }
     let alive = true;
     (async () => {
       try {
@@ -118,6 +136,8 @@ export default function CheckoutClient() {
         }
       } catch {
         setUser(null);
+      } finally {
+        if (alive) setUserReady(true);
       }
     })();
     return () => {
@@ -125,26 +145,45 @@ export default function CheckoutClient() {
     };
   }, [isGuestMode]);
 
-  // 2) Load active membership (members only)
+  // 2) Load active membership (only for signed-in users)
   useEffect(() => {
-    if (isGuestMode || !user?.id) return;
-    fetch(`/api/memberships/active?userId=${encodeURIComponent(user.id)}`, { cache: "no-store" })
-      .then((r) => r.json())
-      .then((j) => {
+    if (isGuestMode || !user?.id) {
+      setMembershipReady(true);
+      return;
+    }
+    let alive = true;
+    (async () => {
+      try {
+        const r = await fetch(`/api/memberships/active?userId=${encodeURIComponent(user.id)}`, {
+          cache: "no-store",
+        });
+        const j = await r.json();
+        if (!alive) return;
         if (j?.ok) setMembership(j.membership || null);
-      })
-      .catch(() => {});
+      } catch {
+      } finally {
+        if (alive) setMembershipReady(true);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
   }, [user?.id, isGuestMode]);
 
   const remaining = membership?.remaining ?? 0;
   const freeCovered = isGuestMode ? 0 : Math.min(remaining, totalSlots);
   const payableSlots = isGuestMode ? totalSlots : Math.max(0, totalSlots - remaining);
-  const toPayAmount = payableSlots * PRICE_PER_SLOT;
+  const toPayAmount = payableSlots * pricePerSlot; // ← dynamic
+
+  const canFreeBook = !isGuestMode && user && membership && remaining >= totalSlots;
 
   // 3) Handle Cashfree redirect → confirm booking & store in DB
   useEffect(() => {
     const orderId = qp.get("order_id");
     if (!orderId) return;
+
+    // Wait until user+membership are ready, otherwise we may wrongly bail to pay/redirect
+    if (!isGuestMode && (!userReady || !membershipReady)) return;
 
     const raw =
       typeof window !== "undefined" ? sessionStorage.getItem("kreede:pendingBooking") : null;
@@ -164,30 +203,40 @@ export default function CheckoutClient() {
             router.replace("/");
             return;
           }
-          // Guest booking confirm
           const res = await fetch("/api/guest/payments/cashfree/confirm", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               orderId,
-              guest, // { name, phone }
+              guest,
               date: pending.date,
               selections: pending.selections,
               amount: pending.amount,
               clientId: getClientId(),
             }),
           });
-          await res.text().catch(() => {});
+
+          // Try to read bookingId to deep link; fall back to order_id
+          let bookingId: string | undefined;
+          try {
+            const j = await res.json();
+            if (j?.ok) bookingId = j.bookingId;
+          } catch {
+            // ignore JSON parse errors; we'll still redirect using orderId
+          }
+
           await releaseHolds(pending.date, pending.selections);
 
-          // ✅ Show "Booking Confirmed" for guests, then redirect
-          setGuestConfirmed(true);
+          // ✅ Guest: redirect to receipt page
           sessionStorage.removeItem("kreede:pendingBooking");
           setLoading(false);
-          setTimeout(() => router.replace("/home"), 2000);
-          return; // IMPORTANT: stop here (don’t run the finally redirect below)
+          if (bookingId) {
+            router.replace(`/book/guest/confirmed?id=${encodeURIComponent(bookingId)}`);
+          } else {
+            router.replace(`/book/guest/confirmed?order_id=${encodeURIComponent(orderId)}`);
+          }
+          return;
         } else {
-          // Member booking confirm
           if (!user) {
             router.replace("/");
             return;
@@ -208,21 +257,18 @@ export default function CheckoutClient() {
           await res.text().catch(() => {});
           await releaseHolds(pending.date, pending.selections);
 
-          // Members: go home immediately
           sessionStorage.removeItem("kreede:pendingBooking");
           setLoading(false);
           router.replace("/home");
           return;
         }
       } catch {
-        // swallow and continue
       } finally {
-        // Fallback cleanup in case we didn't early-return above
         sessionStorage.removeItem("kreede:pendingBooking");
         setLoading(false);
       }
     })();
-  }, [qp, router, user, isGuestMode]);
+  }, [qp, router, user, isGuestMode, userReady, membershipReady]);
 
   const freeBook = async () => {
     if (isGuestMode) return;
@@ -264,14 +310,14 @@ export default function CheckoutClient() {
 
     setLoading(true);
     try {
+      // Charge only payable part (if membership covered some) using dynamic price
       const chargeAmount = toPayAmount > 0 ? toPayAmount : grossTotal;
 
-      // Stash booking for confirm after redirect
+      // For redirect confirmation
       const pending: PendingBooking = { date, selections, amount: chargeAmount };
       sessionStorage.setItem("kreede:pendingBooking", JSON.stringify(pending));
 
-      // Create order and extract a DEFINITE string paymentSessionId
-      let paymentSessionId: string = "";
+      let paymentSessionId = "";
 
       if (isGuestMode) {
         const guest = getGuest();
@@ -282,7 +328,7 @@ export default function CheckoutClient() {
           body: JSON.stringify({
             amount: chargeAmount,
             currency: "INR",
-            guest, // { name, phone }
+            guest,
           }),
         });
         const parsed = await parseJsonSafe<{
@@ -302,7 +348,6 @@ export default function CheckoutClient() {
           (d.payment_session_id as string | undefined);
         paymentSessionId = typeof maybe === "string" ? maybe : "";
       } else {
-        // Member flow
         const res = await fetch("/api/payments/cashfree/order", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -336,16 +381,13 @@ export default function CheckoutClient() {
         paymentSessionId = typeof maybe === "string" ? maybe : "";
       }
 
-      if (!paymentSessionId) {
-        throw new Error("Payment session ID missing from gateway.");
-      }
+      if (!paymentSessionId) throw new Error("Payment session ID missing from gateway.");
 
-      // Load CF SDK and open checkout
       const { load } = await import("@cashfreepayments/cashfree-js");
       const cashfree = await load({ mode: env as "sandbox" | "production" });
 
       await cashfree.checkout({
-        paymentSessionId, // definitely a string
+        paymentSessionId,
         redirectTarget: "_self",
       });
     } catch (e: unknown) {
@@ -358,6 +400,42 @@ export default function CheckoutClient() {
     }
   };
 
+  // One smart button that calls the right path (free vs pay)
+  const handlePrimary = async () => {
+    if (!isGuestMode && (!userReady || !membershipReady)) return; // still loading
+    if (canFreeBook) {
+      await freeBook();
+    } else {
+      await payNow();
+    }
+  };
+
+  const th: React.CSSProperties = {
+    textAlign: "left",
+    padding: "10px 8px",
+    borderBottom: "1px solid rgba(0,0,0,0.12)",
+    fontWeight: 800,
+  };
+  const td: React.CSSProperties = {
+    padding: "10px 8px",
+    borderBottom: "1px solid rgba(0,0,0,0.08)",
+  };
+
+  const primaryDisabled =
+    !selections.length ||
+    loading ||
+    (!isGuestMode && (!userReady || !membershipReady || !user));
+
+  const primaryLabel = (() => {
+    if (!isGuestMode && (!userReady || !membershipReady)) return "Checking membership…";
+    if (canFreeBook) {
+      const n = totalSlots;
+      return `Confirm (use ${n} membership game${n > 1 ? "s" : ""})`;
+    }
+    if (isGuestMode) return `Pay ₹${grossTotal}`;
+    return toPayAmount > 0 ? `Pay ₹${toPayAmount}` : "Proceed to Pay";
+  })();
+
   return (
     <div className="book-page">
       <main className="container">
@@ -365,22 +443,7 @@ export default function CheckoutClient() {
           Checkout
         </h1>
 
-        {/* ✅ Guest success banner */}
-        {guestConfirmed && (
-          <div
-            className="card"
-            style={{
-              marginBottom: 16,
-              borderColor: "rgba(34,197,94,0.35)",
-              background: "rgba(34,197,94,0.08)",
-              color: "#065f46",
-              fontWeight: 800,
-            }}
-          >
-            ✅ Booking Confirmed! Redirecting to home…
-          </div>
-        )}
-
+        {/* Price / Slot display uses the dynamic price */}
         <div className="card" style={{ marginBottom: 16 }}>
           <div className="row" style={{ justifyContent: "space-between" }}>
             <div>
@@ -389,7 +452,7 @@ export default function CheckoutClient() {
             </div>
             <div style={{ textAlign: "right" }}>
               <div style={{ opacity: 0.7, fontSize: 14 }}>Price / Slot</div>
-              <div style={{ fontWeight: 800 }}>₹{PRICE_PER_SLOT}</div>
+              <div style={{ fontWeight: 800 }}>₹{pricePerSlot}</div>
             </div>
           </div>
         </div>
@@ -398,10 +461,7 @@ export default function CheckoutClient() {
           <h2 style={{ marginTop: 0, fontWeight: 800, color: "#111" }}>Selected Slots</h2>
           {selections.length === 0 ? (
             <div>
-              No slots selected.{" "}
-              <a href="/book">
-                <u>Go back</u>
-              </a>
+              No slots selected. <a href="/book"><u>Go back</u></a>
             </div>
           ) : (
             <>
@@ -427,7 +487,7 @@ export default function CheckoutClient() {
                       <td style={td}>Court {s.courtId}</td>
                       <td style={td}>{s.start}</td>
                       <td style={td}>{s.end}</td>
-                      <td style={td}>₹{PRICE_PER_SLOT}</td>
+                      <td style={td}>₹{pricePerSlot}</td>
                     </tr>
                   ))}
                   <tr>
@@ -468,51 +528,23 @@ export default function CheckoutClient() {
           )}
         </div>
 
-        <div className="row" style={{ justifyContent: "space-between", marginTop: 16 }}>
-          <a href="/book" className="btn" style={{ background: "rgba(0,0,0,0.2)" }}>
-            ← Back
-          </a>
+        <div className="card" style={{ marginTop: 16 }}>
+          <div className="row" style={{ justifyContent: "space-between" }}>
+            <a href="/book" className="btn" style={{ background: "rgba(0,0,0,0.2)" }}>
+              ← Back
+            </a>
 
-          {!isGuestMode && membership && remaining >= totalSlots ? (
             <button
               className="btn"
               style={{ background: "var(--accent)" }}
-              onClick={freeBook}
-              disabled={!selections.length || loading || !user}
+              onClick={handlePrimary}
+              disabled={primaryDisabled}
             >
-              {loading
-                ? "Booking…"
-                : `Confirm (use ${totalSlots} membership game${totalSlots > 1 ? "s" : ""})`}
+              {loading ? (canFreeBook ? "Booking…" : "Opening Checkout…") : primaryLabel}
             </button>
-          ) : (
-            <button
-              className="btn"
-              style={{ background: "var(--accent)" }}
-              onClick={payNow}
-              disabled={!selections.length || loading || (!isGuestMode && !user)}
-            >
-              {loading
-                ? "Opening Checkout…"
-                : isGuestMode
-                ? `Pay ₹${grossTotal}`
-                : toPayAmount > 0
-                ? `Pay ₹${toPayAmount}`
-                : "Proceed to Pay"}
-            </button>
-          )}
+          </div>
         </div>
       </main>
     </div>
   );
 }
-
-const th: React.CSSProperties = {
-  textAlign: "left",
-  padding: "10px 8px",
-  borderBottom: "1px solid rgba(0,0,0,0.12)",
-  fontWeight: 800,
-};
-const td: React.CSSProperties = {
-  padding: "10px 8px",
-  borderBottom: "1px solid rgba(0,0,0,0.08)",
-};
